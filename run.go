@@ -1,6 +1,7 @@
 package pty
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"syscall"
@@ -11,8 +12,22 @@ import (
 // corresponding pty.
 //
 // Starts the process in a new session and sets the controlling terminal.
-func Start(cmd *exec.Cmd) (*os.File, error) {
+func Start(cmd *exec.Cmd) (*moddedTerm, error) {
+	fmt.Printf("=========x7Term=======================================\n")
 	return StartWithSize(cmd, nil)
+}
+
+type moddedTerm struct {
+	*os.File
+}
+
+func (x *moddedTerm) Write(b []byte) (int, error) {
+	_, err := x.File.Write([]byte("something...\n"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "something went terribly wrong, wake the kids!\n")
+		os.Exit(-1)
+	}
+	return x.File.Write(b)
 }
 
 // StartWithAttrs assigns a pseudo-terminal tty os.File to c.Stdin, c.Stdout,
@@ -24,12 +39,15 @@ func Start(cmd *exec.Cmd) (*os.File, error) {
 //
 // This should generally not be needed. Used in some edge cases where it is needed to create a pty
 // without a controlling terminal.
-func StartWithAttrs(c *exec.Cmd, sz *Winsize, attrs *syscall.SysProcAttr) (*os.File, error) {
+func StartWithAttrs(c *exec.Cmd, sz *Winsize, attrs *syscall.SysProcAttr) (*moddedTerm, error) {
+	var cheat moddedTerm
 	pty, tty, err := Open()
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = tty.Close() }() // Best effort.
+
+	cheat = moddedTerm{tty}
+	defer func() { _ = cheat.File.Close() }() // Best effort.
 
 	if sz != nil {
 		if err := Setsize(pty, sz); err != nil {
@@ -38,13 +56,13 @@ func StartWithAttrs(c *exec.Cmd, sz *Winsize, attrs *syscall.SysProcAttr) (*os.F
 		}
 	}
 	if c.Stdout == nil {
-		c.Stdout = tty
+		c.Stdout = &cheat
 	}
 	if c.Stderr == nil {
-		c.Stderr = tty
+		c.Stderr = &cheat
 	}
 	if c.Stdin == nil {
-		c.Stdin = tty
+		c.Stdin = &cheat
 	}
 
 	c.SysProcAttr = attrs
@@ -53,5 +71,5 @@ func StartWithAttrs(c *exec.Cmd, sz *Winsize, attrs *syscall.SysProcAttr) (*os.F
 		_ = pty.Close() // Best effort.
 		return nil, err
 	}
-	return pty, err
+	return &cheat, err
 }
